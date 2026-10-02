@@ -1,0 +1,3 @@
+import {
+  "LL124-Arch/amazon-ion-moonbit-core" @ion,
+} for "test"
