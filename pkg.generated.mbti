@@ -1,0 +1,58 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "LL124-Arch/ion-patch"
+
+import {
+  "LL124-Arch/amazon-ion-moonbit-core/format_model",
+}
+
+// Values
+pub fn apply(ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : PatchLimits) -> Array[@format_model.IonValue] raise PatchError
+
+pub fn diff(ArrayView[@format_model.IonValue], ArrayView[@format_model.IonValue], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
+
+pub fn equal_value(@format_model.IonValue, @format_model.IonValue) -> Bool
+
+pub fn equal_values(ArrayView[@format_model.IonValue], ArrayView[@format_model.IonValue]) -> Bool
+
+pub fn invert(ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
+
+// Errors
+pub(all) suberror PatchError {
+  InvalidPath(String)
+  WrongContainer(String)
+  Limit(String)
+}
+
+// Types and methods
+pub(all) struct PatchLimits {
+  max_operations : Int
+  max_path_depth : Int
+  value_limits : @format_model.Limits
+}
+pub fn PatchLimits::default() -> Self
+pub fn PatchLimits::new(max_operations? : Int, max_path_depth? : Int, value_limits? : @format_model.Limits) -> Self
+
+pub(all) enum PatchOp {
+  InsertRoot(Int, @format_model.IonValue)
+  InsertElement(Path, Int, @format_model.IonValue)
+  InsertField(Path, Int, @format_model.IonSymbol, @format_model.IonValue)
+  Remove(Path)
+  Replace(Path, @format_model.IonValue)
+}
+
+pub(all) struct Path {
+  root : Int
+  segments : Array[PathSegment]
+}
+pub fn Path::element(Self, Int) -> Self
+pub fn Path::field(Self, @format_model.IonSymbol, Int) -> Self
+pub fn Path::root(Int) -> Self
+
+pub(all) enum PathSegment {
+  Element(Int)
+  Field(@format_model.IonSymbol, Int)
+}
+
+// Type aliases
+
+// Traits
