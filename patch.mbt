@@ -22,16 +22,34 @@ pub fn apply(
 
 ///|
 /// Return a patch that restores the original document after `operations`.
-/// The input patch is first validated and applied; the inverse is a
-/// deterministic diff from its result back to the original document.
+/// Each inverse operation uses the document state immediately before its
+/// matching forward operation and is returned in reverse execution order.
 pub fn invert(
   original : ArrayView[@model.IonValue],
   operations : ArrayView[PatchOp],
   limits? : PatchLimits,
 ) -> Array[PatchOp] raise PatchError {
   let limits = limits.unwrap_or(PatchLimits::default())
-  let result = apply(original, operations, limits~)
-  diff(result[:], original, limits~)
+  check_limits(limits)
+  if operations.length() > limits.max_operations {
+    raise PatchError::Limit("operation count exceeds max_operations")
+  }
+  check_document(original, limits)
+  let mut current = clone_values(original)
+  let inverse_reversed : Array[PatchOp] = []
+  for operation in operations {
+    let next = apply_one(current, operation, limits)
+    check_document(next[:], limits)
+    inverse_reversed.push(inverse_one(current, next, operation, limits))
+    current = next
+  }
+  let inverse : Array[PatchOp] = []
+  let mut i = inverse_reversed.length() - 1
+  while i >= 0 {
+    inverse.push(inverse_reversed[i])
+    i -= 1
+  }
+  inverse
 }
 
 ///|
