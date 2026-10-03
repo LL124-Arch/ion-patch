@@ -8,6 +8,8 @@ import {
 // Values
 pub fn apply(ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : PatchLimits) -> Array[@format_model.IonValue] raise PatchError
 
+pub fn apply_checked(ArrayView[@format_model.IonValue], ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : PatchLimits) -> Array[@format_model.IonValue] raise PatchError
+
 pub fn compose(ArrayView[@format_model.IonValue], ArrayView[PatchOp], ArrayView[PatchOp], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
 
 pub fn diff(ArrayView[@format_model.IonValue], ArrayView[@format_model.IonValue], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
@@ -20,6 +22,7 @@ pub fn invert(ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : P
 
 // Errors
 pub(all) suberror PatchError {
+  Conflict(String)
   InvalidPath(String)
   WrongContainer(String)
   Limit(String)

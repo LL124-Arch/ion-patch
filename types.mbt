@@ -41,6 +41,7 @@ pub fn PatchLimits::new(
 
 ///|
 pub(all) suberror PatchError {
+  Conflict(String)
   InvalidPath(String)
   WrongContainer(String)
   Limit(String)

@@ -7,11 +7,48 @@ pub fn apply(
   limits? : PatchLimits,
 ) -> Array[@model.IonValue] raise PatchError {
   let limits = limits.unwrap_or(PatchLimits::default())
+  check_apply_input(document, operations, limits)
+  apply_validated(document, operations, limits)
+}
+
+///|
+/// Apply a patch only if the complete current document still equals the
+/// expected baseline. Equality preserves Ion field order, symbol identity,
+/// annotations, and floating-point bit patterns.
+pub fn apply_checked(
+  expected : ArrayView[@model.IonValue],
+  current : ArrayView[@model.IonValue],
+  operations : ArrayView[PatchOp],
+  limits? : PatchLimits,
+) -> Array[@model.IonValue] raise PatchError {
+  let limits = limits.unwrap_or(PatchLimits::default())
+  check_apply_input(current, operations, limits)
+  check_document(expected, limits)
+  if !equal_values(expected, current) {
+    raise PatchError::Conflict("document differs from expected baseline")
+  }
+  apply_validated(current, operations, limits)
+}
+
+///|
+fn check_apply_input(
+  document : ArrayView[@model.IonValue],
+  operations : ArrayView[PatchOp],
+  limits : PatchLimits,
+) -> Unit raise PatchError {
   check_limits(limits)
   if operations.length() > limits.max_operations {
     raise PatchError::Limit("operation count exceeds max_operations")
   }
   check_document(document, limits)
+}
+
+///|
+fn apply_validated(
+  document : ArrayView[@model.IonValue],
+  operations : ArrayView[PatchOp],
+  limits : PatchLimits,
+) -> Array[@model.IonValue] raise PatchError {
   let mut current = clone_values(document)
   for operation in operations {
     current = apply_one(current, operation, limits)
