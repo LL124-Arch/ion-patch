@@ -119,6 +119,17 @@ fn diff_value(
     return
   }
   match (before, after) {
+    (
+      @model.IonValue::Annotated(left_symbols, left_value),
+      @model.IonValue::Annotated(right_symbols, right_value),
+    ) if left_symbols == right_symbols =>
+      diff_value(
+        left_value,
+        right_value,
+        path.annotated_value(),
+        operations,
+        limits,
+      )
     (@model.IonValue::List(left), @model.IonValue::List(right)) =>
       diff_elements(left, right, path, operations, limits)
     (@model.IonValue::Sexp(left), @model.IonValue::Sexp(right)) =>

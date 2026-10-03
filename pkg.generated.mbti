@@ -44,6 +44,7 @@ pub(all) struct Path {
   root : Int
   segments : Array[PathSegment]
 }
+pub fn Path::annotated_value(Self) -> Self
 pub fn Path::element(Self, Int) -> Self
 pub fn Path::field(Self, @format_model.IonSymbol, Int) -> Self
 pub fn Path::root(Int) -> Self
@@ -51,6 +52,7 @@ pub fn Path::root(Int) -> Self
 pub(all) enum PathSegment {
   Element(Int)
   Field(@format_model.IonSymbol, Int)
+  AnnotatedValue
 }
 
 // Type aliases

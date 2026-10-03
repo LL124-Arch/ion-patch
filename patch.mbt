@@ -129,6 +129,12 @@ fn edit_value(
     return replacement
   }
   match (value, segments[depth]) {
+    (@model.IonValue::Annotated(symbols, nested), AnnotatedValue) =>
+      match edit_value(nested, segments, depth + 1, replacement) {
+        Some(updated) => Some(@model.IonValue::Annotated(symbols, updated))
+        None =>
+          raise PatchError::InvalidPath("annotated value cannot be removed")
+      }
     (@model.IonValue::List(elements), Element(index)) =>
       Some(
         @model.IonValue::List(
@@ -241,6 +247,11 @@ fn insert_in_value(
     }
   }
   match (container, segments[depth]) {
+    (@model.IonValue::Annotated(symbols, nested), AnnotatedValue) =>
+      @model.IonValue::Annotated(
+        symbols,
+        insert_in_value(nested, segments, depth + 1, index, field, value),
+      )
     (@model.IonValue::List(elements), Element(child)) =>
       @model.IonValue::List(
         insert_in_elements(

@@ -6,6 +6,7 @@
 pub(all) enum PathSegment {
   Element(Int)
   Field(@model.IonSymbol, Int)
+  AnnotatedValue
 }
 
 ///|
@@ -35,6 +36,14 @@ pub fn Path::field(
 ) -> Path {
   let segments = copy_segments(self.segments[:])
   segments.push(Field(symbol, occurrence))
+  { root: self.root, segments, }
+}
+
+///|
+/// Select the wrapped value of one annotation layer.
+pub fn Path::annotated_value(self : Path) -> Path {
+  let segments = copy_segments(self.segments[:])
+  segments.push(AnnotatedValue)
   { root: self.root, segments, }
 }
 

@@ -13,6 +13,10 @@ fn same_path(a : @ion-patch.Path, b : @ion-patch.Path) -> Bool {
         if x != y || n != m {
           return false
         }
+      (
+        @ion-patch.PathSegment::AnnotatedValue,
+        @ion-patch.PathSegment::AnnotatedValue,
+      ) => ()
       _ => return false
     }
   }
@@ -213,6 +217,167 @@ test "unknown SID and annotation order are exact" {
   let after = [@model.IonValue::Annotated([named, unknown], value)]
   assert_patch_roundtrip(before, after)
   assert_eq(@ion-patch.equal_values(before[:], after[:]), false)
+}
+
+///|
+test "equal annotations keep structural paths inside their wrapped value" {
+  let before = @ion.parse_text("tag::{a: 1, b: [2, 3]}")
+  let after = @ion.parse_text("tag::{a: 1, b: [2, 4]}")
+  let b = @model.IonSymbol::from_text("b")
+  assert_single_patch(
+    before,
+    after,
+    @ion-patch.PatchOp::Replace(
+      @ion-patch.Path::root(0).annotated_value().field(b, 0).element(1),
+      @ion.parse_one_text("4"),
+    ),
+  )
+}
+
+///|
+test "annotation paths compose with fields and s-expression elements" {
+  let payload = @model.IonSymbol::from_text("payload")
+  let tag = @model.IonSymbol::from_text("tag")
+  let a = @ion.parse_one_text("a")
+  let b = @ion.parse_one_text("b")
+  let c = @ion.parse_one_text("c")
+  let before = [
+    @model.IonValue::Struct([
+      (
+        payload,
+        @model.IonValue::Annotated([tag], @model.IonValue::Sexp([a, c])),
+      ),
+    ]),
+  ]
+  let after = [
+    @model.IonValue::Struct([
+      (
+        payload,
+        @model.IonValue::Annotated([tag], @model.IonValue::Sexp([a, b, c])),
+      ),
+    ]),
+  ]
+  assert_single_patch(
+    before,
+    after,
+    @ion-patch.PatchOp::InsertElement(
+      @ion-patch.Path::root(0).field(payload, 0).annotated_value(),
+      1,
+      b,
+    ),
+  )
+}
+
+///|
+test "nested annotation layers preserve order while editing an inner list" {
+  let outer = @model.IonSymbol::from_text("outer")
+  let inner = @model.IonSymbol::from_sid(77)
+  let one = @ion.parse_one_text("1")
+  let two = @ion.parse_one_text("2")
+  let three = @ion.parse_one_text("3")
+  let before = [
+    @model.IonValue::Annotated(
+      [outer],
+      @model.IonValue::Annotated([inner], @model.IonValue::List([one, three])),
+    ),
+  ]
+  let after = [
+    @model.IonValue::Annotated(
+      [outer],
+      @model.IonValue::Annotated(
+        [inner],
+        @model.IonValue::List([one, two, three]),
+      ),
+    ),
+  ]
+  assert_single_patch(
+    before,
+    after,
+    @ion-patch.PatchOp::InsertElement(
+      @ion-patch.Path::root(0).annotated_value().annotated_value(),
+      1,
+      two,
+    ),
+  )
+}
+
+///|
+test "annotation changes replace the wrapper and depth limits stop traversal" {
+  let before = @ion.parse_text("left::{a: 1}")
+  let after = @ion.parse_text("right::{a: 1}")
+  assert_single_patch(
+    before,
+    after,
+    @ion-patch.PatchOp::Replace(
+      @ion-patch.Path::root(0),
+      @ion.parse_one_text("right::{a: 1}"),
+    ),
+  )
+  let changed = @ion.parse_text("left::{a: 2}")
+  let limits = @ion-patch.PatchLimits::new(max_path_depth=0)
+  let operations = @ion-patch.diff(before[:], changed[:], limits~)
+  assert_eq(operations.length(), 1)
+  assert_eq(
+    same_operation(
+      operations[0],
+      @ion-patch.PatchOp::Replace(@ion-patch.Path::root(0), changed[0]),
+    ),
+    true,
+  )
+  let one_step = @ion-patch.PatchLimits::new(max_path_depth=1)
+  let operations = @ion-patch.diff(before[:], changed[:], limits=one_step)
+  assert_eq(operations.length(), 1)
+  assert_eq(
+    same_operation(
+      operations[0],
+      @ion-patch.PatchOp::Replace(
+        @ion-patch.Path::root(0).annotated_value(),
+        @ion.parse_one_text("{a: 2}"),
+      ),
+    ),
+    true,
+  )
+  let restored = @ion-patch.apply(before[:], operations[:], limits=one_step)
+  assert_eq(@ion-patch.equal_values(restored[:], changed[:]), true)
+}
+
+///|
+test "annotated payload deletion is rejected and field insertion is allowed" {
+  let before = @ion.parse_text("tag::{a: 1}")
+  let invalid = [
+    @ion-patch.PatchOp::Remove(@ion-patch.Path::root(0).annotated_value()),
+  ]
+  let error = try @ion-patch.apply(before[:], invalid[:]) catch {
+    error => error
+  } noraise {
+    _ => fail("expected annotated payload deletion error")
+  }
+  match error {
+    @ion-patch.PatchError::InvalidPath(_) => ()
+    _ => fail("expected invalid path")
+  }
+  let b = @model.IonSymbol::from_text("b")
+  let insert = [
+    @ion-patch.PatchOp::InsertField(
+      @ion-patch.Path::root(0).annotated_value(),
+      1,
+      b,
+      @ion.parse_one_text("2"),
+    ),
+  ]
+  let actual = @ion-patch.apply(before[:], insert[:])
+  let expected = @ion.parse_text("tag::{a: 1, b: 2}")
+  assert_eq(@ion-patch.equal_values(actual[:], expected[:]), true)
+  let bare = @ion.parse_text("{a: 1}")
+  let error = try @ion-patch.apply(bare[:], insert[:]) catch {
+    error => error
+  } noraise {
+    _ => fail("expected wrong container")
+  }
+  match error {
+    @ion-patch.PatchError::WrongContainer(_) => ()
+    _ => fail("expected wrong container")
+  }
 }
 
 ///|
