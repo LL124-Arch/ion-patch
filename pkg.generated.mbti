@@ -20,6 +20,8 @@ pub fn equal_values(ArrayView[@format_model.IonValue], ArrayView[@format_model.I
 
 pub fn invert(ArrayView[@format_model.IonValue], ArrayView[PatchOp], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
 
+pub fn merge(ArrayView[@format_model.IonValue], ArrayView[PatchOp], ArrayView[PatchOp], limits? : PatchLimits) -> Array[PatchOp] raise PatchError
+
 // Errors
 pub(all) suberror PatchError {
   Conflict(String)
