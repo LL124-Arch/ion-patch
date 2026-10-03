@@ -46,23 +46,22 @@ fn structural_diff(
   limits : PatchLimits,
 ) -> Array[PatchOp] raise PatchError {
   let operations : Array[PatchOp] = []
-  let shared = if before.length() < after.length() {
-    before.length()
-  } else {
-    after.length()
-  }
-  let mut i = before.length() - 1
-  while i >= shared {
+  let (prefix, suffix) = common_value_edges(before, after)
+  let before_end = before.length() - suffix
+  let after_end = after.length() - suffix
+  let middle_end = if before_end < after_end { before_end } else { after_end }
+  let mut i = before_end - 1
+  while i >= middle_end {
     push_op(operations, Remove(Path::root(i)), limits)
     i -= 1
   }
-  i = after.length() - 1
-  while i >= shared {
-    push_op(operations, InsertRoot(shared, clone_value(after[i])), limits)
+  i = after_end - 1
+  while i >= middle_end {
+    push_op(operations, InsertRoot(middle_end, clone_value(after[i])), limits)
     i -= 1
   }
-  i = shared - 1
-  while i >= 0 {
+  i = middle_end - 1
+  while i >= prefix {
     diff_value(before[i], after[i], Path::root(i), operations, limits)
     i -= 1
   }
@@ -138,29 +137,28 @@ fn diff_elements(
   operations : Array[PatchOp],
   limits : PatchLimits,
 ) -> Unit raise PatchError {
-  let shared = if before.length() < after.length() {
-    before.length()
-  } else {
-    after.length()
-  }
-  let mut i = before.length() - 1
-  while i >= shared {
+  let (prefix, suffix) = common_value_edges(before[:], after[:])
+  let before_end = before.length() - suffix
+  let after_end = after.length() - suffix
+  let middle_end = if before_end < after_end { before_end } else { after_end }
+  let mut i = before_end - 1
+  while i >= middle_end {
     let path = parent.element(i)
     check_path(path, limits)
     push_op(operations, Remove(path), limits)
     i -= 1
   }
-  i = after.length() - 1
-  while i >= shared {
+  i = after_end - 1
+  while i >= middle_end {
     push_op(
       operations,
-      InsertElement(parent, shared, clone_value(after[i])),
+      InsertElement(parent, middle_end, clone_value(after[i])),
       limits,
     )
     i -= 1
   }
-  i = shared - 1
-  while i >= 0 {
+  i = middle_end - 1
+  while i >= prefix {
     diff_value(before[i], after[i], parent.element(i), operations, limits)
     i -= 1
   }
@@ -174,29 +172,28 @@ fn diff_fields(
   operations : Array[PatchOp],
   limits : PatchLimits,
 ) -> Unit raise PatchError {
-  let shared = if before.length() < after.length() {
-    before.length()
-  } else {
-    after.length()
-  }
-  let mut i = before.length() - 1
-  while i >= shared {
+  let (prefix, suffix) = common_field_edges(before[:], after[:])
+  let before_end = before.length() - suffix
+  let after_end = after.length() - suffix
+  let middle_end = if before_end < after_end { before_end } else { after_end }
+  let mut i = before_end - 1
+  while i >= middle_end {
     let path = parent.field(before[i].0, occurrence_at(before, i))
     check_path(path, limits)
     push_op(operations, Remove(path), limits)
     i -= 1
   }
-  i = after.length() - 1
-  while i >= shared {
+  i = after_end - 1
+  while i >= middle_end {
     push_op(
       operations,
-      InsertField(parent, shared, after[i].0, clone_value(after[i].1)),
+      InsertField(parent, middle_end, after[i].0, clone_value(after[i].1)),
       limits,
     )
     i -= 1
   }
-  i = shared - 1
-  while i >= 0 {
+  i = middle_end - 1
+  while i >= prefix {
     let path = parent.field(before[i].0, occurrence_at(before, i))
     check_path(path, limits)
     if before[i].0 == after[i].0 {
@@ -211,4 +208,53 @@ fn diff_fields(
     }
     i -= 1
   }
+}
+
+///|
+fn common_value_edges(
+  before : ArrayView[@model.IonValue],
+  after : ArrayView[@model.IonValue],
+) -> (Int, Int) {
+  let mut prefix = 0
+  while prefix < before.length() &&
+        prefix < after.length() &&
+        equal_value(before[prefix], after[prefix]) {
+    prefix += 1
+  }
+  let mut suffix = 0
+  while suffix < before.length() - prefix &&
+        suffix < after.length() - prefix &&
+        equal_value(
+          before[before.length() - suffix - 1],
+          after[after.length() - suffix - 1],
+        ) {
+    suffix += 1
+  }
+  (prefix, suffix)
+}
+
+///|
+fn common_field_edges(
+  before : ArrayView[(@model.IonSymbol, @model.IonValue)],
+  after : ArrayView[(@model.IonSymbol, @model.IonValue)],
+) -> (Int, Int) {
+  let mut prefix = 0
+  while prefix < before.length() &&
+        prefix < after.length() &&
+        before[prefix].0 == after[prefix].0 &&
+        equal_value(before[prefix].1, after[prefix].1) {
+    prefix += 1
+  }
+  let mut suffix = 0
+  while suffix < before.length() - prefix &&
+        suffix < after.length() - prefix &&
+        before[before.length() - suffix - 1].0 ==
+        after[after.length() - suffix - 1].0 &&
+        equal_value(
+          before[before.length() - suffix - 1].1,
+          after[after.length() - suffix - 1].1,
+        ) {
+    suffix += 1
+  }
+  (prefix, suffix)
 }

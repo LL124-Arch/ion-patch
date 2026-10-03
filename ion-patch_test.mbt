@@ -65,6 +65,83 @@ fn assert_patch_roundtrip(
 }
 
 ///|
+fn assert_single_patch(
+  before : Array[@model.IonValue],
+  after : Array[@model.IonValue],
+  expected : @ion-patch.PatchOp,
+) -> Unit raise Error {
+  let operations = @ion-patch.diff(before[:], after[:])
+  assert_eq(operations.length(), 1)
+  assert_eq(same_operation(operations[0], expected), true)
+  assert_patch_roundtrip(before, after)
+}
+
+///|
+test "middle insertions and deletions keep unchanged sequence edges" {
+  assert_single_patch(
+    @ion.parse_text("a b c"),
+    @ion.parse_text("a x b c"),
+    @ion-patch.PatchOp::InsertRoot(1, @ion.parse_one_text("x")),
+  )
+  assert_single_patch(
+    @ion.parse_text("[1, 2, 3]"),
+    @ion.parse_text("[1, 9, 2, 3]"),
+    @ion-patch.PatchOp::InsertElement(
+      @ion-patch.Path::root(0),
+      1,
+      @ion.parse_one_text("9"),
+    ),
+  )
+  assert_single_patch(
+    @ion.parse_text("(a b c)"),
+    @ion.parse_text("(a c)"),
+    @ion-patch.PatchOp::Remove(@ion-patch.Path::root(0).element(1)),
+  )
+  let limits = @ion-patch.PatchLimits::new(
+    max_operations=1,
+    value_limits=@model.Limits::new(max_values=5),
+  )
+  let before = @ion.parse_text("[1, 2, 3]")
+  let after = @ion.parse_text("[1, 9, 2, 3]")
+  let operations = @ion-patch.diff(before[:], after[:], limits~)
+  assert_eq(operations.length(), 1)
+}
+
+///|
+test "nested insertion preserves the containing field path" {
+  let name = @model.IonSymbol::from_text("items")
+  assert_single_patch(
+    @ion.parse_text("{items: [1, 3]}"),
+    @ion.parse_text("{items: [1, 2, 3]}"),
+    @ion-patch.PatchOp::InsertElement(
+      @ion-patch.Path::root(0).field(name, 0),
+      1,
+      @ion.parse_one_text("2"),
+    ),
+  )
+}
+
+///|
+test "middle field edits retain duplicate occurrence and unknown SID" {
+  let x = @model.IonSymbol::from_text("x")
+  let sid = @model.IonSymbol::from_sid(99)
+  let one = @ion.parse_one_text("1")
+  let two = @ion.parse_one_text("2")
+  let three = @ion.parse_one_text("3")
+  let nine = @ion.parse_one_text("9")
+  assert_single_patch(
+    [@model.IonValue::Struct([(x, one), (x, two), (x, three)])],
+    [@model.IonValue::Struct([(x, one), (x, three)])],
+    @ion-patch.PatchOp::Remove(@ion-patch.Path::root(0).field(x, 1)),
+  )
+  assert_single_patch(
+    [@model.IonValue::Struct([(sid, one), (sid, two), (x, three)])],
+    [@model.IonValue::Struct([(sid, one), (sid, nine), (sid, two), (x, three)])],
+    @ion-patch.PatchOp::InsertField(@ion-patch.Path::root(0), 1, sid, nine),
+  )
+}
+
+///|
 test "ordered structs, duplicate fields, annotations and containers round trip" {
   let before = @ion.parse_text(
     "{a: 1, a: [2, (3 4)], b: note::null.int} [true, false]",
@@ -316,8 +393,13 @@ test "deterministic diff covers empty and mixed documents" {
     @ion.parse_text("1"),
     @ion.parse_text("1 2"),
     @ion.parse_text("[1, 2]"),
+    @ion.parse_text("[1, 2, 3]"),
+    @ion.parse_text("[1, 9, 2, 3]"),
     @ion.parse_text("{a: 1, a: 2}"),
+    @ion.parse_text("{a: 1, b: 3}"),
+    @ion.parse_text("{a: 1, a: 9, a: 2, b: 3}"),
     @ion.parse_text("(a c)"),
+    @ion.parse_text("(a b c)"),
   ]
   for before in documents {
     for after in documents {
