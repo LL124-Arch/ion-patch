@@ -10,7 +10,8 @@ pub fn diff(
   check_limits(limits)
   check_document(before, limits)
   check_document(after, limits)
-  let candidate = try structural_diff(before, after, limits) catch {
+  let budget = { remaining: limits.max_alignment_cells, }
+  let candidate = try structural_diff(before, after, limits, budget) catch {
     PatchError::Limit(_) => None
     error => raise error
   } noraise {
@@ -40,31 +41,53 @@ pub fn diff(
 }
 
 ///|
+priv struct DiffBudget {
+  mut remaining : Int
+}
+
+///|
 fn structural_diff(
   before : ArrayView[@model.IonValue],
   after : ArrayView[@model.IonValue],
   limits : PatchLimits,
+  budget : DiffBudget,
 ) -> Array[PatchOp] raise PatchError {
   let operations : Array[PatchOp] = []
   let (prefix, suffix) = common_value_edges(before, after)
   let before_end = before.length() - suffix
   let after_end = after.length() - suffix
-  let middle_end = if before_end < after_end { before_end } else { after_end }
-  let mut i = before_end - 1
-  while i >= middle_end {
-    push_op(operations, Remove(Path::root(i)), limits)
-    i -= 1
+  let anchors = align_exact(
+    before, after, prefix, before_end, prefix, after_end, equal_value, budget,
+  )
+  let mut before_right = before_end
+  let mut after_right = after_end
+  match anchors {
+    Some(matches) => {
+      let mut i = matches.length() - 1
+      while i >= 0 {
+        let (before_anchor, after_anchor) = matches[i]
+        diff_root_gap(
+          before,
+          after,
+          before_anchor + 1,
+          before_right,
+          after_anchor + 1,
+          after_right,
+          operations,
+          limits,
+          budget,
+        )
+        before_right = before_anchor
+        after_right = after_anchor
+        i -= 1
+      }
+    }
+    None => ()
   }
-  i = after_end - 1
-  while i >= middle_end {
-    push_op(operations, InsertRoot(middle_end, clone_value(after[i])), limits)
-    i -= 1
-  }
-  i = middle_end - 1
-  while i >= prefix {
-    diff_value(before[i], after[i], Path::root(i), operations, limits)
-    i -= 1
-  }
+  diff_root_gap(
+    before, after, prefix, before_right, prefix, after_right, operations, limits,
+    budget,
+  )
   operations
 }
 
@@ -109,6 +132,7 @@ fn diff_value(
   path : Path,
   operations : Array[PatchOp],
   limits : PatchLimits,
+  budget : DiffBudget,
 ) -> Unit raise PatchError {
   if equal_value(before, after) {
     return
@@ -129,13 +153,14 @@ fn diff_value(
         path.annotated_value(),
         operations,
         limits,
+        budget,
       )
     (@model.IonValue::List(left), @model.IonValue::List(right)) =>
-      diff_elements(left, right, path, operations, limits)
+      diff_elements(left, right, path, operations, limits, budget)
     (@model.IonValue::Sexp(left), @model.IonValue::Sexp(right)) =>
-      diff_elements(left, right, path, operations, limits)
+      diff_elements(left, right, path, operations, limits, budget)
     (@model.IonValue::Struct(left), @model.IonValue::Struct(right)) =>
-      diff_fields(left, right, path, operations, limits)
+      diff_fields(left, right, path, operations, limits, budget)
     _ => push_op(operations, Replace(path, clone_value(after)), limits)
   }
 }
@@ -147,32 +172,51 @@ fn diff_elements(
   parent : Path,
   operations : Array[PatchOp],
   limits : PatchLimits,
+  budget : DiffBudget,
 ) -> Unit raise PatchError {
   let (prefix, suffix) = common_value_edges(before[:], after[:])
   let before_end = before.length() - suffix
   let after_end = after.length() - suffix
-  let middle_end = if before_end < after_end { before_end } else { after_end }
-  let mut i = before_end - 1
-  while i >= middle_end {
-    let path = parent.element(i)
-    check_path(path, limits)
-    push_op(operations, Remove(path), limits)
-    i -= 1
+  let anchors = align_exact(
+    before[:],
+    after[:],
+    prefix,
+    before_end,
+    prefix,
+    after_end,
+    equal_value,
+    budget,
+  )
+  let mut before_right = before_end
+  let mut after_right = after_end
+  match anchors {
+    Some(matches) => {
+      let mut i = matches.length() - 1
+      while i >= 0 {
+        let (before_anchor, after_anchor) = matches[i]
+        diff_element_gap(
+          before,
+          after,
+          before_anchor + 1,
+          before_right,
+          after_anchor + 1,
+          after_right,
+          parent,
+          operations,
+          limits,
+          budget,
+        )
+        before_right = before_anchor
+        after_right = after_anchor
+        i -= 1
+      }
+    }
+    None => ()
   }
-  i = after_end - 1
-  while i >= middle_end {
-    push_op(
-      operations,
-      InsertElement(parent, middle_end, clone_value(after[i])),
-      limits,
-    )
-    i -= 1
-  }
-  i = middle_end - 1
-  while i >= prefix {
-    diff_value(before[i], after[i], parent.element(i), operations, limits)
-    i -= 1
-  }
+  diff_element_gap(
+    before, after, prefix, before_right, prefix, after_right, parent, operations,
+    limits, budget,
+  )
 }
 
 ///|
@@ -182,38 +226,214 @@ fn diff_fields(
   parent : Path,
   operations : Array[PatchOp],
   limits : PatchLimits,
+  budget : DiffBudget,
 ) -> Unit raise PatchError {
   let (prefix, suffix) = common_field_edges(before[:], after[:])
   let before_end = before.length() - suffix
   let after_end = after.length() - suffix
-  let middle_end = if before_end < after_end { before_end } else { after_end }
+  let anchors = align_exact(
+    before[:],
+    after[:],
+    prefix,
+    before_end,
+    prefix,
+    after_end,
+    equal_field,
+    budget,
+  )
+  let mut before_right = before_end
+  let mut after_right = after_end
+  match anchors {
+    Some(matches) => {
+      let mut i = matches.length() - 1
+      while i >= 0 {
+        let (before_anchor, after_anchor) = matches[i]
+        diff_field_gap(
+          before,
+          after,
+          before_anchor + 1,
+          before_right,
+          after_anchor + 1,
+          after_right,
+          parent,
+          operations,
+          limits,
+          budget,
+        )
+        before_right = before_anchor
+        after_right = after_anchor
+        i -= 1
+      }
+    }
+    None => ()
+  }
+  diff_field_gap(
+    before, after, prefix, before_right, prefix, after_right, parent, operations,
+    limits, budget,
+  )
+}
+
+///|
+fn diff_root_gap(
+  before : ArrayView[@model.IonValue],
+  after : ArrayView[@model.IonValue],
+  before_start : Int,
+  before_end : Int,
+  after_start : Int,
+  after_end : Int,
+  operations : Array[PatchOp],
+  limits : PatchLimits,
+  budget : DiffBudget,
+) -> Unit raise PatchError {
+  let before_count = before_end - before_start
+  let after_count = after_end - after_start
+  let shared = if before_count < after_count {
+    before_count
+  } else {
+    after_count
+  }
+  let insertion_index = before_start + shared
   let mut i = before_end - 1
-  while i >= middle_end {
+  while i >= insertion_index {
+    push_op(operations, Remove(Path::root(i)), limits)
+    i -= 1
+  }
+  i = after_end - 1
+  while i >= after_start + shared {
+    push_op(
+      operations,
+      InsertRoot(insertion_index, clone_value(after[i])),
+      limits,
+    )
+    i -= 1
+  }
+  i = shared - 1
+  while i >= 0 {
+    diff_value(
+      before[before_start + i],
+      after[after_start + i],
+      Path::root(before_start + i),
+      operations,
+      limits,
+      budget,
+    )
+    i -= 1
+  }
+}
+
+///|
+fn diff_element_gap(
+  before : Array[@model.IonValue],
+  after : Array[@model.IonValue],
+  before_start : Int,
+  before_end : Int,
+  after_start : Int,
+  after_end : Int,
+  parent : Path,
+  operations : Array[PatchOp],
+  limits : PatchLimits,
+  budget : DiffBudget,
+) -> Unit raise PatchError {
+  let before_count = before_end - before_start
+  let after_count = after_end - after_start
+  let shared = if before_count < after_count {
+    before_count
+  } else {
+    after_count
+  }
+  let insertion_index = before_start + shared
+  let mut i = before_end - 1
+  while i >= insertion_index {
+    let path = parent.element(i)
+    check_path(path, limits)
+    push_op(operations, Remove(path), limits)
+    i -= 1
+  }
+  i = after_end - 1
+  while i >= after_start + shared {
+    push_op(
+      operations,
+      InsertElement(parent, insertion_index, clone_value(after[i])),
+      limits,
+    )
+    i -= 1
+  }
+  i = shared - 1
+  while i >= 0 {
+    diff_value(
+      before[before_start + i],
+      after[after_start + i],
+      parent.element(before_start + i),
+      operations,
+      limits,
+      budget,
+    )
+    i -= 1
+  }
+}
+
+///|
+fn diff_field_gap(
+  before : Array[(@model.IonSymbol, @model.IonValue)],
+  after : Array[(@model.IonSymbol, @model.IonValue)],
+  before_start : Int,
+  before_end : Int,
+  after_start : Int,
+  after_end : Int,
+  parent : Path,
+  operations : Array[PatchOp],
+  limits : PatchLimits,
+  budget : DiffBudget,
+) -> Unit raise PatchError {
+  let before_count = before_end - before_start
+  let after_count = after_end - after_start
+  let shared = if before_count < after_count {
+    before_count
+  } else {
+    after_count
+  }
+  let insertion_index = before_start + shared
+  let mut i = before_end - 1
+  while i >= insertion_index {
     let path = parent.field(before[i].0, occurrence_at(before, i))
     check_path(path, limits)
     push_op(operations, Remove(path), limits)
     i -= 1
   }
   i = after_end - 1
-  while i >= middle_end {
+  while i >= after_start + shared {
     push_op(
       operations,
-      InsertField(parent, middle_end, after[i].0, clone_value(after[i].1)),
+      InsertField(parent, insertion_index, after[i].0, clone_value(after[i].1)),
       limits,
     )
     i -= 1
   }
-  i = middle_end - 1
-  while i >= prefix {
-    let path = parent.field(before[i].0, occurrence_at(before, i))
+  i = shared - 1
+  while i >= 0 {
+    let index = before_start + i
+    let target = after_start + i
+    let path = parent.field(before[index].0, occurrence_at(before, index))
     check_path(path, limits)
-    if before[i].0 == after[i].0 {
-      diff_value(before[i].1, after[i].1, path, operations, limits)
+    if before[index].0 == after[target].0 {
+      diff_value(
+        before[index].1,
+        after[target].1,
+        path,
+        operations,
+        limits,
+        budget,
+      )
     } else {
       push_op(operations, Remove(path), limits)
       push_op(
         operations,
-        InsertField(parent, i, after[i].0, clone_value(after[i].1)),
+        InsertField(
+          parent,
+          index,
+          after[target].0,
+          clone_value(after[target].1),
+        ),
         limits,
       )
     }

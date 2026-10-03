@@ -15,6 +15,7 @@ pub(all) enum PatchOp {
 pub(all) struct PatchLimits {
   max_operations : Int
   max_path_depth : Int
+  max_alignment_cells : Int
   value_limits : @model.Limits
 }
 
@@ -23,6 +24,7 @@ pub fn PatchLimits::default() -> PatchLimits {
   {
     max_operations: 100000,
     max_path_depth: 64,
+    max_alignment_cells: 1000000,
     value_limits: @model.Limits::default(),
   }
 }
@@ -31,9 +33,10 @@ pub fn PatchLimits::default() -> PatchLimits {
 pub fn PatchLimits::new(
   max_operations? : Int = 100000,
   max_path_depth? : Int = 64,
+  max_alignment_cells? : Int = 1000000,
   value_limits? : @model.Limits = @model.Limits::default(),
 ) -> PatchLimits {
-  { max_operations, max_path_depth, value_limits, }
+  { max_operations, max_path_depth, max_alignment_cells, value_limits, }
 }
 
 ///|
@@ -45,7 +48,9 @@ pub(all) suberror PatchError {
 
 ///|
 fn check_limits(limits : PatchLimits) -> Unit raise PatchError {
-  if limits.max_operations < 0 || limits.max_path_depth < 0 {
+  if limits.max_operations < 0 ||
+    limits.max_path_depth < 0 ||
+    limits.max_alignment_cells < 0 {
     raise PatchError::Limit("patch limits must be non-negative")
   }
 }

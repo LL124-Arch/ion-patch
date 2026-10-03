@@ -27,10 +27,11 @@ pub(all) suberror PatchError {
 pub(all) struct PatchLimits {
   max_operations : Int
   max_path_depth : Int
+  max_alignment_cells : Int
   value_limits : @format_model.Limits
 }
 pub fn PatchLimits::default() -> Self
-pub fn PatchLimits::new(max_operations? : Int, max_path_depth? : Int, value_limits? : @format_model.Limits) -> Self
+pub fn PatchLimits::new(max_operations? : Int, max_path_depth? : Int, max_alignment_cells? : Int, value_limits? : @format_model.Limits) -> Self
 
 pub(all) enum PatchOp {
   InsertRoot(Int, @format_model.IonValue)

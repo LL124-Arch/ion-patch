@@ -81,6 +81,174 @@ fn assert_single_patch(
 }
 
 ///|
+fn assert_patch_operations(
+  before : Array[@model.IonValue],
+  after : Array[@model.IonValue],
+  expected : Array[@ion-patch.PatchOp],
+) -> Unit raise Error {
+  let actual = @ion-patch.diff(before[:], after[:])
+  assert_eq(actual.length(), expected.length())
+  for i in 0..<actual.length() {
+    assert_eq(same_operation(actual[i], expected[i]), true)
+  }
+  assert_patch_roundtrip(before, after)
+}
+
+///|
+test "two separated insertions have two ordered document operations" {
+  assert_patch_operations(
+    @ion.parse_text("a b c d e"),
+    @ion.parse_text("a x b c y d e"),
+    [
+      @ion-patch.PatchOp::InsertRoot(3, @ion.parse_one_text("y")),
+      @ion-patch.PatchOp::InsertRoot(1, @ion.parse_one_text("x")),
+    ],
+  )
+}
+
+///|
+test "list and s-expression alignment separates edits" {
+  assert_patch_operations(
+    @ion.parse_text("[a, b, c, d, e]"),
+    @ion.parse_text("[a, x, b, c, y, d, e]"),
+    [
+      @ion-patch.PatchOp::InsertElement(
+        @ion-patch.Path::root(0),
+        3,
+        @ion.parse_one_text("y"),
+      ),
+      @ion-patch.PatchOp::InsertElement(
+        @ion-patch.Path::root(0),
+        1,
+        @ion.parse_one_text("x"),
+      ),
+    ],
+  )
+  assert_patch_operations(
+    @ion.parse_text("(a b c d e)"),
+    @ion.parse_text("(a c x d e)"),
+    [
+      @ion-patch.PatchOp::InsertElement(
+        @ion-patch.Path::root(0),
+        3,
+        @ion.parse_one_text("x"),
+      ),
+      @ion-patch.PatchOp::Remove(@ion-patch.Path::root(0).element(1)),
+    ],
+  )
+}
+
+///|
+test "struct alignment preserves duplicate fields and unknown SID" {
+  let sid = @model.IonSymbol::from_sid(77)
+  let x = @model.IonSymbol::from_text("x")
+  let one = @ion.parse_one_text("1")
+  let two = @ion.parse_one_text("2")
+  let three = @ion.parse_one_text("3")
+  let four = @ion.parse_one_text("4")
+  let eight = @ion.parse_one_text("8")
+  let nine = @ion.parse_one_text("9")
+  assert_patch_operations(
+    [@model.IonValue::Struct([(sid, one), (x, two), (sid, three), (x, four)])],
+    [
+      @model.IonValue::Struct([
+        (sid, one),
+        (sid, nine),
+        (x, two),
+        (sid, three),
+        (x, eight),
+        (x, four),
+      ]),
+    ],
+    [
+      @ion-patch.PatchOp::InsertField(@ion-patch.Path::root(0), 3, x, eight),
+      @ion-patch.PatchOp::InsertField(@ion-patch.Path::root(0), 1, sid, nine),
+    ],
+  )
+}
+
+///|
+test "separated edits align inside annotations" {
+  let before = @ion.parse_text("tag::[a, b, c, d, e]")
+  let after = @ion.parse_text("tag::[a, x, b, c, y, d, e]")
+  let parent = @ion-patch.Path::root(0).annotated_value()
+  assert_patch_operations(before, after, [
+    @ion-patch.PatchOp::InsertElement(parent, 3, @ion.parse_one_text("y")),
+    @ion-patch.PatchOp::InsertElement(parent, 1, @ion.parse_one_text("x")),
+  ])
+}
+
+///|
+test "alignment budget falls back to positional comparison" {
+  let before = @ion.parse_text("a b c d e")
+  let after = @ion.parse_text("a x b c y d e")
+  let limits = @ion-patch.PatchLimits::new(max_alignment_cells=0)
+  let operations = @ion-patch.diff(before[:], after[:], limits~)
+  assert_eq(operations.length(), 4)
+  let result = @ion-patch.apply(before[:], operations[:], limits~)
+  assert_eq(@ion-patch.equal_values(result[:], after[:]), true)
+  let invalid = @ion-patch.PatchLimits::new(max_alignment_cells=-1)
+  let error = try @ion-patch.diff(before[:], after[:], limits=invalid) catch {
+    error => error
+  } noraise {
+    _ => fail("expected invalid alignment budget")
+  }
+  match error {
+    @ion-patch.PatchError::Limit(_) => ()
+    _ => fail("expected limit error")
+  }
+}
+
+///|
+test "alignment cell budget is shared across nested containers" {
+  let before = @ion.parse_text("[a, b, c, d, e] [a, b, c, d, e]")
+  let after = @ion.parse_text("[a, x, b, c, y, d, e] [a, x, b, c, y, d, e]")
+  let limits = @ion-patch.PatchLimits::new(max_alignment_cells=12)
+  let operations = @ion-patch.diff(before[:], after[:], limits~)
+  assert_eq(operations.length(), 6)
+  let result = @ion-patch.apply(before[:], operations[:], limits~)
+  assert_eq(@ion-patch.equal_values(result[:], after[:]), true)
+}
+
+///|
+test "small repeated-value sequences round trip across alignment ties" {
+  let sequences = [
+    [],
+    @ion.parse_text("a"),
+    @ion.parse_text("b"),
+    @ion.parse_text("a a"),
+    @ion.parse_text("a b"),
+    @ion.parse_text("b a"),
+    @ion.parse_text("b b"),
+    @ion.parse_text("a a a"),
+    @ion.parse_text("a a b"),
+    @ion.parse_text("a b a"),
+    @ion.parse_text("a b b"),
+    @ion.parse_text("b a a"),
+    @ion.parse_text("b a b"),
+    @ion.parse_text("b b a"),
+    @ion.parse_text("b b b"),
+  ]
+  let name = @model.IonSymbol::from_text("x")
+  for before in sequences {
+    for after in sequences {
+      assert_patch_roundtrip(before, after)
+      let before_fields : Array[(@model.IonSymbol, @model.IonValue)] = []
+      let after_fields : Array[(@model.IonSymbol, @model.IonValue)] = []
+      for value in before {
+        before_fields.push((name, value))
+      }
+      for value in after {
+        after_fields.push((name, value))
+      }
+      assert_patch_roundtrip([@model.IonValue::Struct(before_fields)], [
+        @model.IonValue::Struct(after_fields),
+      ])
+    }
+  }
+}
+
+///|
 test "middle insertions and deletions keep unchanged sequence edges" {
   assert_single_patch(
     @ion.parse_text("a b c"),
