@@ -5,6 +5,9 @@ fn assert_merged(
   right_document : Array[@model.IonValue],
   expected : Array[@model.IonValue],
 ) -> Unit raise Error {
+  let base_snapshot = @ion-patch.apply(base[:], [])
+  let left_snapshot = @ion-patch.apply(left_document[:], [])
+  let right_snapshot = @ion-patch.apply(right_document[:], [])
   let left = @ion-patch.diff(base[:], left_document[:])
   let right = @ion-patch.diff(base[:], right_document[:])
   let combined = @ion-patch.merge(base[:], left[:], right[:])
@@ -19,6 +22,9 @@ fn assert_merged(
   let reverse = @ion-patch.invert(base[:], combined[:])
   let restored = @ion-patch.apply(result[:], reverse[:])
   assert_eq(@ion-patch.equal_values(restored[:], base[:]), true)
+  assert_eq(@ion-patch.equal_values(base[:], base_snapshot[:]), true)
+  assert_eq(@ion-patch.equal_values(left_document[:], left_snapshot[:]), true)
+  assert_eq(@ion-patch.equal_values(right_document[:], right_snapshot[:]), true)
 }
 
 ///|
@@ -146,11 +152,12 @@ test "merge rejects divergent edits to the same value" {
 }
 
 ///|
-test "merge rejects concurrent sequence and field layout changes" {
-  assert_merge_conflict(
+test "merge accepts distinct insertion gaps and rejects field layout conflicts" {
+  assert_merged(
     @ion.parse_text("[1, 2]"),
     @ion.parse_text("[0, 1, 2]"),
     @ion.parse_text("[1, 2, 3]"),
+    @ion.parse_text("[0, 1, 2, 3]"),
   )
   assert_merge_conflict(
     @ion.parse_text("{a: 1}"),
@@ -162,10 +169,11 @@ test "merge rejects concurrent sequence and field layout changes" {
     @ion.parse_text("{b: 2, a: 1}"),
     @ion.parse_text("{a: 3, b: 2}"),
   )
-  assert_merge_conflict(
+  assert_merged(
     @ion.parse_text("1 2"),
     @ion.parse_text("0 1 2"),
     @ion.parse_text("1 2 3"),
+    @ion.parse_text("0 1 2 3"),
   )
 }
 
