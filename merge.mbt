@@ -37,6 +37,12 @@ fn merge_sequence(
     if left.length() < base.length() && right.length() < base.length() {
       return merge_deletions(base, left, right, equal_value, clone_value)
     }
+    if left.length() > base.length() && right.length() < base.length() {
+      return merge_insert_delete(base, left, right, equal_value, clone_value)
+    }
+    if right.length() > base.length() && left.length() < base.length() {
+      return merge_insert_delete(base, right, left, equal_value, clone_value)
+    }
     raise PatchError::Conflict("concurrent changes alter sequence length")
   }
   let combined : Array[@model.IonValue] = []
@@ -124,6 +130,24 @@ fn merge_fields(
         base[:],
         left[:],
         right[:],
+        equal_field,
+        clone_field,
+      )
+    }
+    if left.length() > base.length() && right.length() < base.length() {
+      return merge_insert_delete(
+        base[:],
+        left[:],
+        right[:],
+        equal_field,
+        clone_field,
+      )
+    }
+    if right.length() > base.length() && left.length() < base.length() {
+      return merge_insert_delete(
+        base[:],
+        right[:],
+        left[:],
         equal_field,
         clone_field,
       )
@@ -229,6 +253,42 @@ fn[T] merge_deletions(
     }
     if in_right {
       right_cursor += 1
+    }
+  }
+  combined
+}
+
+///|
+/// Keep inserted gap values and only the base elements retained by the other
+/// branch. Both mappings must have a unique exact subsequence embedding.
+fn[T] merge_insert_delete(
+  base : ArrayView[T],
+  inserted : ArrayView[T],
+  reduced : ArrayView[T],
+  same : (T, T) -> Bool,
+  copy : (T) -> T,
+) -> Array[T] raise PatchError {
+  let insert_anchors = unique_embedding(base, inserted, same)
+  let retained_positions = unique_embedding(reduced, base, same)
+  let combined : Array[T] = []
+  let mut insert_start = 0
+  let mut retained_cursor = 0
+  for gap in 0..<=base.length() {
+    let insert_end = if gap == base.length() {
+      inserted.length()
+    } else {
+      insert_anchors[gap]
+    }
+    for index in insert_start..<insert_end {
+      combined.push(copy(inserted[index]))
+    }
+    if gap < base.length() {
+      if retained_cursor < retained_positions.length() &&
+        retained_positions[retained_cursor] == gap {
+        combined.push(copy(base[gap]))
+        retained_cursor += 1
+      }
+      insert_start = insert_end + 1
     }
   }
   combined
