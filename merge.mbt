@@ -34,6 +34,9 @@ fn merge_sequence(
     if left.length() > base.length() && right.length() > base.length() {
       return merge_insertions(base, left, right, equal_value, clone_value)
     }
+    if left.length() < base.length() && right.length() < base.length() {
+      return merge_deletions(base, left, right, equal_value, clone_value)
+    }
     raise PatchError::Conflict("concurrent changes alter sequence length")
   }
   let combined : Array[@model.IonValue] = []
@@ -116,6 +119,15 @@ fn merge_fields(
         clone_field,
       )
     }
+    if left.length() < base.length() && right.length() < base.length() {
+      return merge_deletions(
+        base[:],
+        left[:],
+        right[:],
+        equal_field,
+        clone_field,
+      )
+    }
     raise PatchError::Conflict("concurrent changes alter struct fields")
   }
   let combined : Array[(@model.IonSymbol, @model.IonValue)] = []
@@ -191,41 +203,73 @@ fn[T] merge_insertions(
 }
 
 ///|
+/// A base element survives only when both deletion-only branches retain it.
+fn[T] merge_deletions(
+  base : ArrayView[T],
+  left : ArrayView[T],
+  right : ArrayView[T],
+  same : (T, T) -> Bool,
+  copy : (T) -> T,
+) -> Array[T] raise PatchError {
+  let left_positions = unique_embedding(left, base, same)
+  let right_positions = unique_embedding(right, base, same)
+  let combined : Array[T] = []
+  let mut left_cursor = 0
+  let mut right_cursor = 0
+  for index in 0..<base.length() {
+    let in_left = left_cursor < left_positions.length() &&
+      left_positions[left_cursor] == index
+    let in_right = right_cursor < right_positions.length() &&
+      right_positions[right_cursor] == index
+    if in_left && in_right {
+      combined.push(copy(base[index]))
+    }
+    if in_left {
+      left_cursor += 1
+    }
+    if in_right {
+      right_cursor += 1
+    }
+  }
+  combined
+}
+
+///|
 /// The earliest and latest subsequence matches must agree at every element.
 fn[T] unique_embedding(
-  base : ArrayView[T],
-  branch : ArrayView[T],
+  subsequence : ArrayView[T],
+  sequence : ArrayView[T],
   same : (T, T) -> Bool,
 ) -> Array[Int] raise PatchError {
   let earliest : Array[Int] = []
   let mut cursor = 0
-  for item in base {
-    while cursor < branch.length() && !same(item, branch[cursor]) {
+  for item in subsequence {
+    while cursor < sequence.length() && !same(item, sequence[cursor]) {
       cursor += 1
     }
-    if cursor == branch.length() {
-      raise PatchError::Conflict("branch changes or removes a base element")
+    if cursor == sequence.length() {
+      raise PatchError::Conflict("ordered elements cannot be aligned")
     }
     earliest.push(cursor)
     cursor += 1
   }
-  let latest = Array::make(base.length(), 0)
-  cursor = branch.length() - 1
-  let mut i = base.length() - 1
+  let latest = Array::make(subsequence.length(), 0)
+  cursor = sequence.length() - 1
+  let mut i = subsequence.length() - 1
   while i >= 0 {
-    while cursor >= 0 && !same(base[i], branch[cursor]) {
+    while cursor >= 0 && !same(subsequence[i], sequence[cursor]) {
       cursor -= 1
     }
     if cursor < 0 {
-      raise PatchError::Conflict("branch changes or removes a base element")
+      raise PatchError::Conflict("ordered elements cannot be aligned")
     }
     latest[i] = cursor
     cursor -= 1
     i -= 1
   }
-  for index in 0..<base.length() {
+  for index in 0..<subsequence.length() {
     if earliest[index] != latest[index] {
-      raise PatchError::Conflict("base element position is ambiguous")
+      raise PatchError::Conflict("ordered element position is ambiguous")
     }
   }
   earliest
