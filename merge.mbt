@@ -11,8 +11,25 @@ pub fn merge(
   let limits = limits.unwrap_or(PatchLimits::default())
   let left_result = apply(base, left, limits~)
   let right_result = apply(base, right, limits~)
-  let combined = merge_sequence(base, left_result[:], right_result[:])
+  let combined = merge_sequence(
+    base,
+    left_result[:],
+    right_result[:],
+    replace_only(left),
+    replace_only(right),
+  )
   diff(base, combined[:], limits~)
+}
+
+///|
+fn replace_only(operations : ArrayView[PatchOp]) -> Bool {
+  for operation in operations {
+    match operation {
+      Replace(_, _) => ()
+      _ => return false
+    }
+  }
+  true
 }
 
 ///|
@@ -20,6 +37,8 @@ fn merge_sequence(
   base : ArrayView[@model.IonValue],
   left : ArrayView[@model.IonValue],
   right : ArrayView[@model.IonValue],
+  left_replace_only : Bool,
+  right_replace_only : Bool,
 ) -> Array[@model.IonValue] raise PatchError {
   if equal_values(left, right) {
     return clone_values(left)
@@ -43,11 +62,33 @@ fn merge_sequence(
     if right.length() > base.length() && left.length() < base.length() {
       return merge_insert_delete(base, right, left, equal_value, clone_value)
     }
+    if left.length() > base.length() &&
+      right.length() == base.length() &&
+      right_replace_only {
+      return merge_insert_replacements(
+        base, left, right, equal_value, clone_value,
+      )
+    }
+    if right.length() > base.length() &&
+      left.length() == base.length() &&
+      left_replace_only {
+      return merge_insert_replacements(
+        base, right, left, equal_value, clone_value,
+      )
+    }
     raise PatchError::Conflict("concurrent changes alter sequence length")
   }
   let combined : Array[@model.IonValue] = []
   for i in 0..<base.length() {
-    combined.push(merge_value(base[i], left[i], right[i]))
+    combined.push(
+      merge_value(
+        base[i],
+        left[i],
+        right[i],
+        left_replace_only,
+        right_replace_only,
+      ),
+    )
   }
   combined
 }
@@ -57,6 +98,8 @@ fn merge_value(
   base : @model.IonValue,
   left : @model.IonValue,
   right : @model.IonValue,
+  left_replace_only : Bool,
+  right_replace_only : Bool,
 ) -> @model.IonValue raise PatchError {
   if equal_value(left, right) {
     return clone_value(left)
@@ -74,7 +117,13 @@ fn merge_value(
       @model.IonValue::List(right_items),
     ) =>
       @model.IonValue::List(
-        merge_sequence(base_items[:], left_items[:], right_items[:]),
+        merge_sequence(
+          base_items[:],
+          left_items[:],
+          right_items[:],
+          left_replace_only,
+          right_replace_only,
+        ),
       )
     (
       @model.IonValue::Sexp(base_items),
@@ -82,7 +131,13 @@ fn merge_value(
       @model.IonValue::Sexp(right_items),
     ) =>
       @model.IonValue::Sexp(
-        merge_sequence(base_items[:], left_items[:], right_items[:]),
+        merge_sequence(
+          base_items[:],
+          left_items[:],
+          right_items[:],
+          left_replace_only,
+          right_replace_only,
+        ),
       )
     (
       @model.IonValue::Struct(base_fields),
@@ -90,7 +145,9 @@ fn merge_value(
       @model.IonValue::Struct(right_fields),
     ) =>
       @model.IonValue::Struct(
-        merge_fields(base_fields, left_fields, right_fields),
+        merge_fields(
+          base_fields, left_fields, right_fields, left_replace_only, right_replace_only,
+        ),
       )
     (
       @model.IonValue::Annotated(base_symbols, base_value),
@@ -102,7 +159,9 @@ fn merge_value(
       }
       @model.IonValue::Annotated(
         base_symbols,
-        merge_value(base_value, left_value, right_value),
+        merge_value(
+          base_value, left_value, right_value, left_replace_only, right_replace_only,
+        ),
       )
     }
     _ => raise PatchError::Conflict("concurrent changes overlap")
@@ -114,6 +173,8 @@ fn merge_fields(
   base : Array[(@model.IonSymbol, @model.IonValue)],
   left : Array[(@model.IonSymbol, @model.IonValue)],
   right : Array[(@model.IonSymbol, @model.IonValue)],
+  left_replace_only : Bool,
+  right_replace_only : Bool,
 ) -> Array[(@model.IonSymbol, @model.IonValue)] raise PatchError {
   if base.length() != left.length() || base.length() != right.length() {
     if left.length() > base.length() && right.length() > base.length() {
@@ -152,6 +213,38 @@ fn merge_fields(
         clone_field,
       )
     }
+    if left.length() > base.length() &&
+      right.length() == base.length() &&
+      right_replace_only {
+      for i in 0..<base.length() {
+        if base[i].0 != right[i].0 {
+          raise PatchError::Conflict("concurrent changes alter struct fields")
+        }
+      }
+      return merge_insert_replacements(
+        base[:],
+        left[:],
+        right[:],
+        equal_field,
+        clone_field,
+      )
+    }
+    if right.length() > base.length() &&
+      left.length() == base.length() &&
+      left_replace_only {
+      for i in 0..<base.length() {
+        if base[i].0 != left[i].0 {
+          raise PatchError::Conflict("concurrent changes alter struct fields")
+        }
+      }
+      return merge_insert_replacements(
+        base[:],
+        right[:],
+        left[:],
+        equal_field,
+        clone_field,
+      )
+    }
     raise PatchError::Conflict("concurrent changes alter struct fields")
   }
   let combined : Array[(@model.IonSymbol, @model.IonValue)] = []
@@ -159,7 +252,18 @@ fn merge_fields(
     if base[i].0 != left[i].0 || base[i].0 != right[i].0 {
       raise PatchError::Conflict("concurrent changes alter struct fields")
     }
-    combined.push((base[i].0, merge_value(base[i].1, left[i].1, right[i].1)))
+    combined.push(
+      (
+        base[i].0,
+        merge_value(
+          base[i].1,
+          left[i].1,
+          right[i].1,
+          left_replace_only,
+          right_replace_only,
+        ),
+      ),
+    )
   }
   combined
 }
@@ -288,6 +392,37 @@ fn[T] merge_insert_delete(
         combined.push(copy(base[gap]))
         retained_cursor += 1
       }
+      insert_start = insert_end + 1
+    }
+  }
+  combined
+}
+
+///|
+/// Retain each inserted gap and use the replacement-only branch's value at
+/// the corresponding original position. The original positions in the
+/// insertion branch must have a unique exact embedding.
+fn[T] merge_insert_replacements(
+  base : ArrayView[T],
+  inserted : ArrayView[T],
+  replaced : ArrayView[T],
+  same : (T, T) -> Bool,
+  copy : (T) -> T,
+) -> Array[T] raise PatchError {
+  let anchors = unique_embedding(base, inserted, same)
+  let combined : Array[T] = []
+  let mut insert_start = 0
+  for gap in 0..<=base.length() {
+    let insert_end = if gap == base.length() {
+      inserted.length()
+    } else {
+      anchors[gap]
+    }
+    for index in insert_start..<insert_end {
+      combined.push(copy(inserted[index]))
+    }
+    if gap < base.length() {
+      combined.push(copy(replaced[gap]))
       insert_start = insert_end + 1
     }
   }
