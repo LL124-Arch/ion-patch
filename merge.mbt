@@ -76,6 +76,20 @@ fn merge_sequence(
         base, right, left, equal_value, clone_value,
       )
     }
+    if left.length() < base.length() &&
+      right.length() == base.length() &&
+      right_replace_only {
+      return merge_delete_replacements(
+        base, left, right, equal_value, clone_value,
+      )
+    }
+    if right.length() < base.length() &&
+      left.length() == base.length() &&
+      left_replace_only {
+      return merge_delete_replacements(
+        base, right, left, equal_value, clone_value,
+      )
+    }
     raise PatchError::Conflict("concurrent changes alter sequence length")
   }
   let combined : Array[@model.IonValue] = []
@@ -238,6 +252,38 @@ fn merge_fields(
         }
       }
       return merge_insert_replacements(
+        base[:],
+        right[:],
+        left[:],
+        equal_field,
+        clone_field,
+      )
+    }
+    if left.length() < base.length() &&
+      right.length() == base.length() &&
+      right_replace_only {
+      for i in 0..<base.length() {
+        if base[i].0 != right[i].0 {
+          raise PatchError::Conflict("concurrent changes alter struct fields")
+        }
+      }
+      return merge_delete_replacements(
+        base[:],
+        left[:],
+        right[:],
+        equal_field,
+        clone_field,
+      )
+    }
+    if right.length() < base.length() &&
+      left.length() == base.length() &&
+      left_replace_only {
+      for i in 0..<base.length() {
+        if base[i].0 != left[i].0 {
+          raise PatchError::Conflict("concurrent changes alter struct fields")
+        }
+      }
+      return merge_delete_replacements(
         base[:],
         right[:],
         left[:],
@@ -424,6 +470,32 @@ fn[T] merge_insert_replacements(
     if gap < base.length() {
       combined.push(copy(replaced[gap]))
       insert_start = insert_end + 1
+    }
+  }
+  combined
+}
+
+///|
+/// Keep replacement values only at uniquely located surviving positions.
+/// A replacement of a deleted original element conflicts with its removal.
+fn[T] merge_delete_replacements(
+  base : ArrayView[T],
+  reduced : ArrayView[T],
+  replaced : ArrayView[T],
+  same : (T, T) -> Bool,
+  copy : (T) -> T,
+) -> Array[T] raise PatchError {
+  let retained = unique_embedding(reduced, base, same)
+  let combined : Array[T] = []
+  let mut cursor = 0
+  for index in 0..<base.length() {
+    if cursor < retained.length() && retained[cursor] == index {
+      combined.push(copy(replaced[index]))
+      cursor += 1
+    } else if !same(base[index], replaced[index]) {
+      raise PatchError::Conflict(
+        "concurrent replacement targets a deleted element",
+      )
     }
   }
   combined
